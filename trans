@@ -1,0 +1,87 @@
+#!/usr/bin/python3
+
+import sys
+import psycopg2
+import re
+from helpers import getStudent
+
+# define any local helper functions here
+
+### set up some globals
+
+usage = f"Usage: {sys.argv[0]} zID"
+db = None
+
+### process command-line args
+
+argc = len(sys.argv)
+if argc < 2:
+	print(usage)
+	exit(1)
+zid = sys.argv[1]
+if zid[0] == 'z':
+	zid = zid[1:8]
+digits = re.compile("^\d{7}$")
+if not digits.match(zid):
+	print(f"Invalid student ID {zid}")
+	exit(1)
+
+# manipulate database
+try:
+	db = psycopg2.connect("dbname=mymyunsw")
+	stuInfo = getStudent(db,zid)
+	if not stuInfo:
+		print(f"Invalid student ID {zid}")
+		exit()
+	id, surName, firstName = stuInfo
+	# print stuinfo
+	print(f'{id} {surName}, {firstName}')
+	
+	# Print transcript for Student
+	cur = db.cursor()
+	cur.execute('select * from q1(%s)',[zid])
+	
+	sumWeighedMark = 0
+	sumWeighedUOC = 0
+	sumUOC = 0
+	for tup in cur.fetchall():
+		CourseCode, Term, SubjectTitle, Mark, Grade, UOC = tup
+		
+		if Mark is not None:
+			sumWeighedMark += int(Mark) * int(UOC)
+			sumWeighedUOC += int(UOC)
+			if Grade in ['FL', 'UF', 'E', 'F']:
+				print(f'{CourseCode} {Term} {SubjectTitle:<32s}{Mark:>3} {Grade:2s}   fail')
+				continue	
+			else:
+				sumUOC += int(UOC)
+		else:
+			Mark = '-'
+			if Grade == 'AF':
+				sumWeighedUOC += int(UOC)
+				print(f'{CourseCode} {Term} {SubjectTitle:<32s}{Mark:>3} {Grade:2s}   fail')
+				continue
+			elif Grade in ['A', 'A+', 'A-', 'B', 'B+', 'B-', 
+							'C', 'C+', 'C-', 'D', 'D+', 'D-',
+							'XE', 'T', 'SY', 'EC', 'RC', 'NC']:
+				sumUOC += int(UOC)
+			elif not Grade:
+				Grade = '-'
+				print(f'{CourseCode} {Term} {SubjectTitle:<32s}{Mark:>3} {Grade:>2s}   0uoc')
+				continue
+		
+		print(f'{CourseCode} {Term} {SubjectTitle:<32s}{Mark:>3} {Grade:2s}  {UOC:2d}uoc')
+	
+	cur.close()
+	
+	try:	
+		print(f'UOC = {sumUOC}, WAM = {round(sumWeighedMark / sumWeighedUOC, 1)}')
+	except ZeroDivisionError as z:
+		print(z)
+
+except Exception as err:
+	print("DB error: ", err)
+finally:
+	if db:
+		db.close()
+

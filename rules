@@ -1,0 +1,167 @@
+#!/usr/bin/python3
+
+import sys
+import psycopg2
+import re
+from helpers import getProgram, getStream
+
+# define any local helper functions here
+# ...
+
+### set up some globals
+
+usage = f"Usage: {sys.argv[0]} (ProgramCode|StreamCode)"
+db = None
+
+### process command-line args
+
+argc = len(sys.argv)
+if argc < 2:
+	print(usage)
+	exit(1)
+code = sys.argv[1]
+if len(code) == 4:
+	codeOf = "program"
+elif len(code) == 6:
+	codeOf = "stream"
+
+try:
+	db = psycopg2.connect("dbname=mymyunsw")
+	if codeOf == "program":
+		progInfo = getProgram(db,code)
+		if not progInfo:
+			print(f"Invalid program code {code}")
+			exit()
+		
+		code, name, uoc, months, offerBy = progInfo
+		duration = int(months) / 12.0
+		
+		print(f'{code} {name}, {uoc} UOC, {duration} years\n- offered by {offerBy}')
+		print(f'Academic Requirements:')
+		
+		# List the rules for Program
+		cur = db.cursor()
+		cur.execute('select * from q2_program(%s)', [code])
+		for ruleInfo in cur.fetchall():
+			
+			AcadObjName = ruleInfo[1]
+			ruleType = ruleInfo[2]
+			# AcadObjType = ruleInfo[5]
+			min_req = ruleInfo[3]
+			max_req = ruleInfo[4]
+			streams = ruleInfo[6]
+			
+			if ruleType == 'DS':
+				print(f'{max_req} stream(s) from {AcadObjName}')
+				for s in streams.split(','):
+					cur.execute('select * from q2_stream_name(%s)', [s])
+					streamName = cur.fetchone()[0]
+					if streamName is None:
+						print(f'- {s} ???')
+					else:
+						print(f'- {s} {streamName}')
+			elif ruleType == 'GE':
+				print(f'{min_req} UOC of {AcadObjName}')					
+			else:
+				if re.search(',', streams) is None:
+					print(f'{AcadObjName}')
+					if len(streams) == 8:
+						cur.execute('select * from q2_subject_name(%s)', [streams])
+						print(f'- {streams} {cur.fetchone()[0]}')
+					else:
+						s1, s2 = streams.split(';')
+						cur.execute('select * from q2_subject_name(%s)', [s1[1:]])
+						print(f'- {s1[1:]} {cur.fetchone()[0]}')
+						cur.execute('select * from q2_subject_name(%s)', [s2[:-1]])
+						print(f'  or {s2[:-1]} {cur.fetchone()[0]}')	
+				else:
+					if min_req is None and max_req is None:					
+						print(f'all courses from {AcadObjName}')
+					elif min_req is None:
+						print(f'{max_req} UOC courses from {AcadObjName}')
+					else:
+						print(f'{min_req} UOC courses from {AcadObjName}')
+					
+					if re.search('#', streams) is None:
+						for s in streams.split(','):
+							if len(s) == 8:
+								cur.execute('select * from q2_subject_name(%s)', [s])
+								print(f'- {s} {cur.fetchone()[0]}')
+							else:
+								s1, s2 = s.split(';')
+								cur.execute('select * from q2_subject_name(%s)', [s1[1:]])
+								print(f'- {s1[1:]} {cur.fetchone()[0]}')
+								cur.execute('select * from q2_subject_name(%s)', [s2[:-1]])
+								print(f'  or {s2[:-1]} {cur.fetchone()[0]}')
+					else:
+						if re.search('FREE####', streams) is None:
+							print(f'- courses matching {streams}')
+
+		cur.close()
+
+	elif codeOf == "stream":
+		strmInfo = getStream(db,code)
+		if not strmInfo:
+			print(f"Invalid stream code {code}")
+			exit()
+		#print(strmInfo)
+		code, name, offerBy = strmInfo
+		print(f'{code} {name}\n- offered by {offerBy}')
+		print(f'Academic Requirements:')
+
+		# List the rules for Stream
+		cur = db.cursor()
+		cur.execute('select * from q2_stream(%s)', [code])
+		for ruleInfo in cur.fetchall():
+			ruleName = ruleInfo[2]
+			ruleType = ruleInfo[3]
+			try:
+				min_req = int(ruleInfo[4])
+			except TypeError:
+				min_req = None
+			try:
+				max_req = int(ruleInfo[5])
+			except TypeError:
+				max_req = None
+			
+			if ruleType == 'CC':
+				print(f'{ruleName}')
+			else:
+				if max_req is None and type(min_req) is int:
+					if ruleType == 'FE':
+						print(f'at least {min_req} UOC of Free Electives')
+					else:	
+						print(f'at least {min_req} UOC courses from {ruleName}')
+				if min_req is None and type(max_req) is int:	
+					print(f'up to {max_req} UOC courses from {ruleName}')
+				if type(min_req) is int and type(max_req) is int and min_req == max_req:
+					print(f'{min_req} UOC courses from {ruleName}')
+				if type(min_req) is int and type(max_req) is int and min_req < max_req:
+					print(f'between {min_req} and {max_req} UOC courses from {ruleName}')
+			
+			streams = ruleInfo[7]
+			if re.search('#', streams) is None:
+				for s in streams.split(','):
+					if len(s) == 8:
+						cur.execute('select * from q2_subject_name(%s)', [s])
+						subjName = cur.fetchone()[0]
+						if subjName is None:
+							print(f'- {s} ???')
+						else:
+							print(f'- {s} {subjName}')
+					else:
+						s1, s2 = s.split(';')
+						cur.execute('select * from q2_subject_name(%s)', [s1[1:]])
+						print(f'- {s1[1:]} {cur.fetchone()[0]}')
+						cur.execute('select * from q2_subject_name(%s)', [s2[:-1]])
+						print(f'  or {s2[:-1]} {cur.fetchone()[0]}')
+			else:
+				if re.search('FREE####', streams) is None:
+					print(f'- courses matching {streams}')
+
+
+except Exception as err:
+	print(err)
+finally:
+	if db:
+		db.close()

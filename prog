@@ -1,0 +1,391 @@
+#!/usr/bin/python3
+
+import sys
+import psycopg2
+import re
+from helpers import getStudent, getProgram, getStream
+
+# Global data structure 
+'''
+data = {
+    'CC':	[ {'r_name': str, 
+			'subjects': [] }
+		]
+	'PE':	[ {'r_name': str,
+			'min': str or None -> int or None,
+			'max': str or None -> int or None,
+			'subjects': [] }
+		]
+	'GE':	[{'r_name': 'General Education', 
+			'min': int,
+			'subjects': 'GEN#####' }
+		]
+	'FE':	[ {'r_name': str,
+			'min': str or None -> int or None,
+			'max': str or None -> int or None, }
+		]		
+	}		 			 
+'''
+data = {'CC': [], 'PE': [], 'GE': [], 'FE': []}
+
+###### helper functions ######
+'''
+Load all the rules of prog & stream to global data structure
+Return: Nothing
+'''
+def loadRules(db, strmCode, progCode):
+	global data
+	cur = db.cursor()
+	cur.execute('select r_name, r_type, min, max, stream from q2_stream(%s)', [strmCode])
+	for ruleInfo in cur.fetchall():
+		ruleName, ruleType, minReq, maxReq, subject = ruleInfo
+		subjects = subject.split(',')
+		if ruleType == 'CC':
+			ccInfo = {'r_name': ruleName, 'subjects': subjects}
+			data['CC'].append(ccInfo)
+		if ruleType == 'PE':
+			peInfo = {'r_name': ruleName, 'min': minReq, 'max': maxReq, 'subjects': subjects}
+			data['PE'].append(peInfo)
+		if ruleType == 'FE':
+			feInfo = {'r_name': 'Free Electives', 'min': minReq, 'max': maxReq}
+			data['FE'].append(feInfo)		
+	
+	cur.execute('select name, r_type, min_req, max_req, stream from q2_program(%s)', [progCode])
+	for ruleInfo in cur.fetchall():
+		ruleName, ruleType, minReq, maxReq, subject = ruleInfo
+		subjects = subject.split(',')
+		if ruleType == 'CC':
+			ccInfo = {'r_name': ruleName, 'subjects': subjects}
+			data['CC'].append(ccInfo)
+		if ruleType == 'PE':
+			peInfo = {'r_name': ruleName, 'min': minReq, 'max': maxReq, 'subjects': subjects}
+			data['PE'].append(peInfo)
+		if ruleType == 'GE':
+			geInfo = {'r_name': 'General Education', 'min': int(minReq), 'subjects': 'GEN#####'}
+			data['GE'].append(geInfo)
+	cur.close()
+
+'''
+Check if rules contain ADK
+Return: Bool
+'''
+def isPEalsoADK(CourseCode, uoc):
+	global data
+	for rule in data['PE']:
+		if rule['r_name'] == 'ADK Courses':
+			for subj in rule['subjects']:
+				if subj == CourseCode:
+					mx = int(rule['max']) - uoc
+					if mx >= 0:
+						rule['min'] = mx
+						rule['max'] = mx
+						return True
+	return False	
+
+'''
+Update the global data structure as per a student's trans
+Return: ruleName or None
+'''
+def updateProgData(CourseCode, uoc):
+	global data
+	for rule in data['CC']:
+		for subj in rule['subjects']:
+			if re.search(CourseCode, subj):
+				rule['subjects'].remove(subj)
+				return rule['r_name']
+	a = isPEalsoADK(CourseCode, uoc)
+	for rule in data['PE']:
+		for subj in rule['subjects']:
+			if re.search('#', subj):
+				if re.search(subj[:5], CourseCode):
+					if rule['min'] is not None and rule['max'] is not None and int(rule['min']) == int(rule['max']):
+						mx = int(rule['max']) - uoc
+						if mx >= 0:
+							rule['min'] = mx
+							rule['max'] = mx
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']
+					elif rule['min'] is not None and rule['max'] is not None and int(rule['min']) < int(rule['max']):
+						mx = int(rule['max']) - uoc
+						mi = int(rule['min']) - uoc
+						if mx >= 0:
+							rule['min'] = mi if mi >= 0 else 0
+							rule['max'] = mx
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']
+					elif rule['min'] and rule['max'] is None:
+						mi = int(rule['min']) - uoc
+						if mi >= 0:
+							rule['min'] = mi
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']
+					elif rule['max'] and rule['min'] is None:
+						mx = int(rule['max']) - uoc
+						if mx >= 0:
+							rule['max'] = mx
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']		
+			else:
+				if CourseCode == subj:
+					if rule['min'] is not None and rule['max'] is not None and int(rule['min']) == int(rule['max']):
+						mx = int(rule['max']) - uoc
+						if mx >= 0:
+							rule['min'] = mx
+							rule['max'] = mx
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']
+					elif rule['min'] is not None and rule['max'] is not None and int(rule['min']) < int(rule['max']):
+						mx = int(rule['max']) - uoc
+						mi = int(rule['min']) - uoc
+						if mx >= 0:
+							rule['min'] = mi if mi >= 0 else 0
+							rule['max'] = mx
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']
+					elif rule['min'] and rule['max'] is None:
+						mi = int(rule['min']) - uoc
+						if mi >= 0:
+							rule['min'] = mi
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']
+					elif rule['max'] and rule['min'] is None:
+						mx = int(rule['max']) - uoc
+						if mx >= 0:
+							rule['max'] = mx
+							if a:
+								return rule['r_name'] + ' + ADK Courses'
+							else:
+								return rule['r_name']		
+	for rule in data['GE']:
+		if re.search(rule['subjects'][:3], CourseCode):
+			mi = rule['min'] - uoc
+			if mi >= 0:
+				rule['min'] = mi
+				return rule['r_name']	
+	for rule in data['FE']:
+		if re.search(r'^\w{8}$', CourseCode):
+			if rule['min'] is not None and rule['max'] is not None and int(rule['min']) == int(rule['max']):
+				mx = int(rule['max']) - uoc
+				if mx >= 0:
+					rule['min'] = mx
+					rule['max'] = mx
+					return rule['r_name']
+			elif rule['min'] is not None and rule['max'] is not None and int(rule['min']) < int(rule['max']):
+				mx = int(rule['max']) - uoc
+				mi = int(rule['min']) - uoc
+				if mx >= 0:
+					rule['min'] = mi if mi >= 0 else 0
+					rule['max'] = mx
+					return rule['r_name']
+			elif rule['min'] and rule['max'] is None:
+				mi = int(rule['min']) - uoc
+				if mi >= 0:
+					rule['min'] = mi
+					return rule['r_name']
+			elif rule['max'] and rule['min'] is None:
+				mx = int(rule['max']) - uoc
+				if mx >= 0:
+					rule['max'] = mx
+					return rule['r_name']
+	return None			
+
+'''
+Update the global data structure as per a student's trans
+Return: Nothing
+'''
+def checkProg(db):
+	global data
+	cur = db.cursor()
+	for rule in data['CC']:
+		if rule['subjects']:
+			for s in rule['subjects']:
+				if len(s) == 8:
+						cur.execute('select * from q2_subject_name(%s)', [s])
+						subjName = cur.fetchone()[0]
+						if subjName is None:
+							print(f'- {s} ???')
+						else:
+							print(f'- {s} {subjName}')
+				else:
+					s1, s2 = s.split(';')
+					cur.execute('select * from q2_subject_name(%s)', [s1[1:]])
+					print(f'- {s1[1:]} {cur.fetchone()[0]}')
+					cur.execute('select * from q2_subject_name(%s)', [s2[:-1]])
+					print(f'  or {s2[:-1]} {cur.fetchone()[0]}')
+	cur.close()			
+	for rule in data['PE']:
+		ruleName = rule['r_name']
+		mi = rule['min']
+		mx = rule['max']
+		if type(mi) is int and type(mx) is int and mi > 0 and mx > 0 and mi == mx:
+			if ruleName == 'ADK Courses':
+				print(f'{mi} UOC from {ruleName}')
+			else:
+				print(f'{mi} UOC courses from {ruleName}')
+		elif type(mi) is int and type(mx) is int and mi >= 0 and mx > 0 and mi < mx:
+			print(f'between {mi} and {mx} UOC courses from {ruleName}')
+		elif type(mi) is int and mi > 0 and mx is None:
+			print(f'at least {mi} UOC courses from {ruleName}')
+		elif type(mx) is int and mx > 0 and mi is None:
+			print(f'up to {mx} UOC courses from {ruleName}')
+	for rule in data['GE']:
+		mi = rule['min']
+		if mi > 0:
+			print(f'{mi} UOC of General Education')
+	for rule in data['FE']:
+		ruleName = rule['r_name']
+		mi = rule['min']
+		mx = rule['max']
+		if type(mi) is int and type(mx) is int and mi > 0 and mx > 0 and mi == mx:
+			print(f'{mi} UOC of {ruleName}')
+		elif type(mi) is int and type(mx) is int and mi > 0 and mx > 0 and mi < mx:
+			print(f'between {mi} and {mx} UOC of {ruleName}')
+		elif type(mi) is int and mi > 0 and mx is None:
+			print(f'at least {mi} UOC of {ruleName}')
+		elif type(mx) is int and mx > 0 and mi is None:
+			print(f'up to {mx} UOC of {ruleName}')
+
+'''
+Update the global data structure as per a student's trans
+Return: sumUOC (int)
+'''
+def printTrans(db, zid, sumUOC=0):
+	cur = db.cursor()
+	cur.execute('select * from q1(%s)',[zid])
+	print('\nCompleted:')
+	for tup in cur.fetchall():
+		CourseCode, Term, subjTitle, Mark, Grade, UOC = tup
+		if Mark is not None:
+			if Grade in ['FL', 'UF', 'E', 'F']:
+				print(f'{CourseCode} {Term} {subjTitle:<32s}{Mark:>3} {Grade:2s}   fail does not count')
+				continue	
+			else:
+				sumUOC += int(UOC)
+				ruleName = updateProgData(CourseCode, int(UOC))
+		else:
+			Mark = '-'
+			if Grade in ['AF']:
+				print(f'{CourseCode} {Term} {subjTitle:<32s}{Mark:>3} {Grade:2s}   fail does not count')
+				continue
+			elif Grade in ['A', 'A+', 'A-', 'B', 'B+', 'B-', 
+							'C', 'C+', 'C-', 'D', 'D+', 'D-',
+							'XE', 'T', 'SY', 'EC', 'RC', 'NC']:
+				sumUOC += int(UOC)
+				ruleName = updateProgData(CourseCode, int(UOC))
+			elif not Grade:
+				Grade = '-'
+				print(f'{CourseCode} {Term} {subjTitle:<32s}{Mark:>3} {Grade:>2s}   0uoc does not count')
+				continue
+		if ruleName:
+			print(f'{CourseCode} {Term} {subjTitle:<32s}{Mark:>3} {Grade:2s}  {UOC:2d}uoc towards {ruleName}')
+		else:
+			print(f'{CourseCode} {Term} {subjTitle:<32s}{Mark:>3} {Grade:2s}   0uoc does not satisfy any rule')
+			sumUOC -= int(UOC)
+	cur.close()
+	return sumUOC	
+
+
+if __name__ == '__main__':
+	# command-line args error checking
+	usage = f"Usage: {sys.argv[0]} zID [Program Stream]"
+	argc = len(sys.argv)
+	if argc < 2:
+		print(usage)
+		exit(1)
+
+	zid = sys.argv[1]
+	if zid[0] == 'z':
+		zid = zid[1:8]
+	
+	digits = re.compile("^\d{7}$")
+	if not digits.match(zid):
+		print("Invalid student ID")
+		exit(1)
+
+	db = None
+	progCode = None
+	strmCode = None
+	if argc == 4:
+		progCode = sys.argv[2]
+		strmCode = sys.argv[3]
+
+	# manipulate database
+	try:
+		db = psycopg2.connect("dbname=mymyunsw")
+		stuInfo = getStudent(db,zid)
+		if not stuInfo:
+			print(f"Invalid student id {zid}")
+			exit()
+		id, surName, firstName = stuInfo
+		# print(stuInfo)
+		print(f'{id} {surName}, {firstName}')
+
+		# if have a program/stream
+		if progCode and strmCode:
+			progInfo = getProgram(db,progCode)
+			if not progInfo:
+				print(f"Invalid program code {progCode}")
+				exit()
+			progName = progInfo[1]
+			uoc = progInfo[2] 
+			print(f'  {progCode} {progName}')
+			strmInfo = getStream(db,strmCode)
+			if not strmInfo:
+				print(f"Invalid program code {strmCode}")
+				exit()
+			strmName = strmInfo[1]
+			print(f'  {strmCode} {strmName}')
+			
+			loadRules(db, strmCode, progCode)
+			# Print transcript
+			sumUOC = printTrans(db, zid, 0)
+			print(f'UOC = {sumUOC} so far')
+			# determine if graduate
+			if sumUOC == uoc:
+				print(f'\nEligible to graduate')
+			else:
+				print(f'\nRemaining to complete degree:')
+				checkProg(db)
+		# find program/stream for most recent enrolment term
+		else:
+			cur = db.cursor()
+			cur.execute('select * from q3_most_recent_term(%s)',[zid])
+			enrolInfo  = cur.fetchone()
+			cur.close()
+			progCode = enrolInfo[2]
+			progName = enrolInfo[3]
+			uoc = enrolInfo[4]
+			strmCode = enrolInfo[5]
+			strmName = enrolInfo[6]
+			print(f'  {progCode} {progName}\n  {strmCode} {strmName}')
+
+			loadRules(db, strmCode, progCode)
+			# Print transcript
+			sumUOC = printTrans(db, zid, 0)
+			print(f'UOC = {sumUOC} so far')
+			# determine if graduate
+			if sumUOC < uoc:
+				print(f'\nRemaining to complete degree:')
+				checkProg(db)
+			else:
+				print(f'\nEligible to graduate')
+	except Exception as err:
+		print("DB error: ", err)
+	finally:
+		if db:
+			db.close()
+
